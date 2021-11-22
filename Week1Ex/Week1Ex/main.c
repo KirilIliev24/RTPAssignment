@@ -140,63 +140,119 @@
  //}
 //
  ///*-----------------------------------------------------------*/
+
+SemaphoreHandle_t printSemaphore;
+QueueHandle_t inputQueue;
+QueueHandle_t outputQueue;
+
+void receiveTask( void *pvParameters );
+void sendTask( void *pvParameters );
+void userInputTask( void *pvParameters );
+void printTask( void *pvParameters );
+
+struct Message
+{
+	char data[25];
+	int16_t ID;
+} FullMessage;
+
+TimerHandle_t timer1;
+TimerHandle_t timer2;
+TimerHandle_t timer3;
+ 
  void initialiseSystem()
  {
-	 // Set PORTA pin 0 and pin 2 to output
-	 DDRA = 0b00000101;
-	 
-	 // Set PORTD pin 1, 3 to pull up on input
-	 PORTA |= _BV(PIND1) | _BV(PIND3);
-	 //PORTC |= _BV(PINC0) | _BV(PINC1)| _BV(PINC2) | _BV(PINC3) | _BV(PINC4) | _BV(PINC5);
-	 
 	 // Make it possible to use stdio on COM port 0 (USB) on Arduino board - Setting 57600,8,N,1
-	 stdio_initialise(ser_USART0);
+	 
+	  stdio_initialise(ser_USART0);
+	 
+	 //Port initialization
+	 //PortA all IN
+	 DDRA = 0b00000000;
+	 
+	 //PortK bit 6 and 7 also in
+	 //bit 4 and 5 out 
+	 //bit 0 in for acknowledgment
+	 //bit 1 out for acknowledgment
+	 DDRK = 0b00110010;
+	 
+	 //PortC all OUT
+	 DDRC = 0b11111111;
+	 
+	 if ( printSemaphore == NULL )  // Check to confirm that the Semaphore has not already been created.
+	 {
+		printSemaphore = xSemaphoreCreateMutex();  // Create a mutex semaphore.
+		if ( ( printSemaphore ) != NULL )
+		{
+			xSemaphoreGive( ( printSemaphore ) );  // Make the mutex available for use, by initially "Giving" the Semaphore.
+		}
+	 }
+	  
+	 //Task initialization
+	 xTaskCreate(
+		 receiveTask,
+		 "receive",
+		 400,
+		 (void *) 1,
+		 1,
+		 NULL
+	 );
+	 
+	 xTaskCreate(
+		 sendTask,
+		 "send",
+		 400,
+		 (void *) 1,
+		 1,
+		 NULL
+	 );
+	 
+	 xTaskCreate(
+		 userInputTask,
+		 "userInput",
+		 400,
+		 (void *) 1,
+		 1,
+		 NULL
+	 );
+	 
+	 xTaskCreate(
+		 printTask,
+		 "print",
+		 400,
+		 (void *) 1,
+		 1,
+		 NULL
+	 );
+	 
+	 //Queue init
+	 inputQueue = xQueueCreate(10, sizeof(FullMessage));
+	 outputQueue = xQueueCreate(10, sizeof(FullMessage));
+	 
 	 //trace_init();
 	 
-	 // Create some tasks
-	 //create_tasks_and_semaphores();
 	 
-	 // Initialize drivers
-	 
-	 //display_7seg_initialise(NULL);
-	 //display_7seg_powerUp();
-	 
-	 //rc_servo_initialise ();
 	 
  }
 
  /*-----------------------------------------------------------*/
 
-SemaphoreHandle_t xSemaphore;
 
-void task1( void *pvParameters );
-void task2( void *pvParameters );
-void task3( void *pvParameters );
 
-TimerHandle_t timer1;
-TimerHandle_t timer2;
-TimerHandle_t timer3;
 
  int main(void)
  {	
 	initialiseSystem();
 	
-	xTaskCreate(
-		task2,
-		"name",
-		400,
-		(void *) 1,
-		1,
-		NULL
-	);
+	
 	vTaskStartScheduler();
  }
  
  
- void task1 (void * pvParameters)
+ void receiveTask (void * pvParameters)
 {
 	#if (configUSE_APPLICATION_TASK_TAG == 1)
-		vTaskSetApplicationTaskTag(NULL, (void *) 5);
+		vTaskSetApplicationTaskTag(NULL, (void *) 1);
 	#endif
 	
 	while(1)
@@ -212,8 +268,11 @@ TimerHandle_t timer3;
 	}
 }
 
-void task2(void * pvParameters)
+void sendTask(void * pvParameters)
 {
+	#if (configUSE_APPLICATION_TASK_TAG == 1)
+	vTaskSetApplicationTaskTag(NULL, (void *) 2);
+	#endif
 	while(1)
 	{
 		//send data on pin 0 and 2
@@ -223,14 +282,15 @@ void task2(void * pvParameters)
 	}
 }
 
-void task3(void * pvParameters)
+void userInputTask(void * pvParameters)
 {
 	#if (configUSE_APPLICATION_TASK_TAG == 1)
-	vTaskSetApplicationTaskTag(NULL, (void *) 7);
+	vTaskSetApplicationTaskTag(NULL, (void *) 3);
 	#endif
 	while(1)
 	{
 		xSemaphoreTake(xSemaphore, portMAX_DELAY);
+		//add to the queue
 		printf("Task 3 \n\n");
 		
 		for (int i = 0; i < 15000; i++)
@@ -238,5 +298,31 @@ void task3(void * pvParameters)
 		}
 		xSemaphoreGive(xSemaphore);
 		vTaskDelay(pdMS_TO_TICKS(1000));
+	}
+}
+
+void printTask(void * pvParameters)
+{
+	//picoscope
+	#if (configUSE_APPLICATION_TASK_TAG == 1)
+	vTaskSetApplicationTaskTag(NULL, (void *) 4);
+	#endif
+	
+	while(1)
+	{
+		//read from the queue and print
+		xSemaphoreTake(printSemaphore, portMAX_DELAY);
+		
+		struct FullMessage xRxedStructure;
+		for(;;)
+		{
+			xQueueReceive(inputQueue,&(xRxedStructure),portMAX_DELAY);
+			//Now the struct can be used in the code e.g.
+			int16_t id = xRxedStructure.ID;
+			char data[25] = xRxedStructure.data; 
+			printf("Data received: %d %s \n", id, data);
+		}
+		xSemaphoreGive(printSemaphore);
+		//vTaskDelay(pdMS_TO_TICKS(1000));
 	}
 }
