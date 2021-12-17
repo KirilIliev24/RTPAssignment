@@ -39,86 +39,104 @@
 #define QUEUE_LENGTH 10
 #define QUEUE_ITEM_SIZE sizeof(struct SimpleMessage)
 
- TimerHandle_t timer1;
- TimerHandle_t timer2;
- TimerHandle_t timer3;
- 
- void initialiseSystem()
- {
-	 // Make it possible to use stdio on COM port 0 (USB) on Arduino board - Setting 57600,8,N,1
-	 
-	 stdio_initialise(ser_USART0);
-	 
-	 //Port initialization
-	 //PortA all data IN
-	 DDRA = 0b00000000;
-	 
-	 //PortK
-	 //bit 0 out for acknowledgment
-	 //bit 1 in for acknowledgment
-	 //bit 2 message out signal
-	 //bit 3 message in signal
-	 //bit 4 and 5 also data OUT
-	 //bit 6 and 7 also data IN
-	 DDRK = 0b00110101;
-	 
-	 //PortC all data OUT
-	 DDRC = 0b11111111;
-	 
-	 if (NULL == printSemaphore)  // Check to confirm that the Semaphore has not already been created.
-	 {
-		 printSemaphore = xSemaphoreCreateMutex();  // Create a mutex semaphore.
-		 if (NULL != printSemaphore)
-		 {
-			 xSemaphoreGive( ( printSemaphore ) );  // Make the mutex available for use, by initially "Giving" the Semaphore.
-		 }
-	 }
-	 
-	 //Task initialization
-	 xTaskCreate(
-	 receiveTask,
-	 "receive",
-	 configMINIMAL_STACK_SIZE,
-	 NULL,
-	 1,
-	 NULL
-	 );
-	 
-	 xTaskCreate(
-	 sendTask,
-	 "send",
-	 configMINIMAL_STACK_SIZE,
-	 NULL,
-	 1,
-	 NULL
-	 );
-	 
-	 xTaskCreate(
-	 userInputTask,
-	 "userInput",
-	 configMINIMAL_STACK_SIZE,
-	 NULL,
-	2,
-	 NULL
-	 );
-	 
-	 xTaskCreate(
-	 printTask,
-	 "print",
-	 configMINIMAL_STACK_SIZE,
-	 NULL,
-	 1,
-	 NULL
-	 );
-	 
-	 //Queue init
-	 sendQueue = xQueueCreate(QUEUE_LENGTH, QUEUE_ITEM_SIZE);
-	 receiveQueue = xQueueCreate(QUEUE_LENGTH, QUEUE_ITEM_SIZE);
-	 
-	 //trace_init();
- }
+TimerHandle_t timer1;
+TimerHandle_t timer2;
+TimerHandle_t timer3;
 
- /*-----------------------------------------------------------*/
+char setBit(char value, char pos){
+	char mask = 0x01 << pos;
+	return (value | mask);
+}
+
+char unsetBit(char value, char pos){
+	char mask = 0x01 << pos;
+	return (value & ~mask);
+}
+
+char isSet(char value, int pos){
+	char mask = 0x01 << pos;
+	return value & mask;
+}
+
+ 
+void initialiseSystem()
+{
+	// Make it possible to use stdio on COM port 0 (USB) on Arduino board - Setting 57600,8,N,1
+	 
+	stdio_initialise(ser_USART0);
+	 
+	//Port initialization
+	//PortA all data IN
+	DDRA = 0b00000000;
+	 
+	//PortK
+	//bit 0 out for acknowledgment
+	//bit 1 in for acknowledgment
+	//bit 2 message out signal
+	//bit 3 message in signal
+	//bit 4 and 5 also data OUT
+	//bit 6 and 7 also data IN
+	// DDRK = 0b10101100;
+	DDRK = 0b00110101;
+
+	 
+	//PortC all data OUT and set to szero
+	DDRC = 0b11111111;
+	PORTC = 0b00000000;
+	 
+	if (NULL == printSemaphore)  // Check to confirm that the Semaphore has not already been created.
+	{
+		printSemaphore = xSemaphoreCreateMutex();  // Create a mutex semaphore.
+		if (NULL != printSemaphore)
+		{
+			xSemaphoreGive( ( printSemaphore ) );  // Make the mutex available for use, by initially "Giving" the Semaphore.
+		}
+	}
+	 
+	//Task initialization
+	xTaskCreate(
+	receiveTask,
+	"receive",
+	configMINIMAL_STACK_SIZE,
+	NULL,
+	1,
+	NULL
+	);
+	
+	xTaskCreate(
+	sendTask,
+	"send",
+	configMINIMAL_STACK_SIZE,
+	NULL,
+	1,
+	NULL
+	);
+	 
+	xTaskCreate(
+	userInputTask,
+	"userInput",
+	configMINIMAL_STACK_SIZE,
+	NULL,
+	2,
+	NULL
+	);
+	 
+	xTaskCreate(
+	printTask,
+	"print",
+	configMINIMAL_STACK_SIZE,
+	NULL,
+	1,
+	NULL
+	);
+	
+	//Queue init
+	sendQueue = xQueueCreate(QUEUE_LENGTH, QUEUE_ITEM_SIZE);
+	receiveQueue = xQueueCreate(QUEUE_LENGTH, QUEUE_ITEM_SIZE);
+	
+	//trace_init();
+}
+/*-----------------------------------------------------------*/
 
 
 
@@ -130,25 +148,30 @@ int main(void)
 }
  
  
+char id = 0;
 void receiveTask (void * pvParameters)
 {
 	//picoscope
 	#if (configUSE_APPLICATION_TASK_TAG == 1)
 	vTaskSetApplicationTaskTag(NULL, (void *) 1);
 	#endif
-	 
-	while(1)
+	
+	char readValue;
+	struct SimpleMessage message;
+	
+	for(;;)
 	{
-		//receive data on pin 1
-		//printf("Task 1 \n");
-		int s = PINA & 0b00000010;
-		if (s == 0)
-		{
-			//printf("s is 0");
+		vTaskDelay(pdMS_TO_TICKS(100));
+		readValue = PINA;
+		if ('\0' != readValue){
+			message.data = readValue;
+			message.id = ++id;
+			xQueueSend(receiveQueue,(void*)&message, portMAX_DELAY);
+			vTaskDelay(pdMS_TO_TICKS(100));
 		}
-		vTaskDelay(pdMS_TO_TICKS(10000));
 	}
 }
+
 
 void sendTask(void * pvParameters)
 {
@@ -156,17 +179,27 @@ void sendTask(void * pvParameters)
 	#if (configUSE_APPLICATION_TASK_TAG == 1)
 	vTaskSetApplicationTaskTag(NULL, (void *) 2);
 	#endif
-	 
-	while(1)
+	
+	char toSend = 0x41; // A
+	struct SimpleMessage message;
+	
+	for(;;)
 	{
 		//send data on pin 0 and 2
 		//printf("Sending signal \n");
-		PORTA = PORTA & 0b11111010;
-		vTaskDelay(pdMS_TO_TICKS(10000));
+		//PORTC = 0b11111010;
+		if( xQueueReceive( sendQueue, &message, portMAX_DELAY )){
+	 
+			PORTC = message.data;
+			// Set MSG out high
+			//PORTK = setBit(PORTK, 1);
+			vTaskDelay(pdMS_TO_TICKS(200));
+			//PORTK = unsetBit(PORTK, 1);
+			PORTC = 0x00;
+		 }
 	}
 }
 
-char id = 0;
 
 void userInputTask(void * pvParameters)
 {
@@ -181,7 +214,7 @@ void userInputTask(void * pvParameters)
 	char i;
 	struct SimpleMessage message;
 	 
-	while(1)
+	for(;;)
 	{
 		xTaskDelayUntil(&last_wake_time, xFrequency);
 		
@@ -195,27 +228,28 @@ void userInputTask(void * pvParameters)
 	}
 }
 
- void printTask(void * pvParameters)
- {
-	 //picoscope
-	 #if (configUSE_APPLICATION_TASK_TAG == 1)
-	 vTaskSetApplicationTaskTag(NULL, (void *) 4);
-	 #endif
+void printTask(void * pvParameters)
+{
+	//picoscope
+	#if (configUSE_APPLICATION_TASK_TAG == 1)
+	vTaskSetApplicationTaskTag(NULL, (void *) 4);
+	#endif
 	 
-	 struct SimpleMessage message;
+	struct SimpleMessage message;
 	 
-	 while(1)
-	 {
-		 // Blocks when nothing in queue
-		 // TOOD: change to receiveQueue
-		 if( xQueueReceive( sendQueue, &message, portMAX_DELAY )){
-		 
+	for(;;)
+	{
+		// Blocks when nothing in queue
+		// TOOD: change to receiveQueue
+		if( xQueueReceive( receiveQueue, &message, portMAX_DELAY )){
+		//if( xQueueReceive( sendQueue, &message, portMAX_DELAY )){
+	 
 			//read from the queue and print
-			 if (xSemaphoreTake(printSemaphore, portMAX_DELAY))
-			 {
-				 printf("%c", message.data);
-				 xSemaphoreGive(printSemaphore);
-			 }
+			if (xSemaphoreTake(printSemaphore, portMAX_DELAY))
+			{
+				printf("%c", message.data);
+				xSemaphoreGive(printSemaphore);
+			}
 		 }
 	 }
  }
