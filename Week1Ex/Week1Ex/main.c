@@ -42,6 +42,7 @@ typedef struct SimpleMessage SimpleMessage;
 TimerHandle_t timer1;
 TimerHandle_t timer2;
 TimerHandle_t timer3;
+TimerHandle_t timer4;
 
 char setBit(char value, char pos){
 	char mask = 0x01 << pos;
@@ -79,7 +80,8 @@ void initialiseSystem()
 	// Make it possible to use stdio on COM port 0 (USB) on Arduino board - Setting 57600,8,N,1
 	 
 	stdio_initialise(ser_USART0);
-	 
+	trace_init();
+	
 	//Port initialization
 	//PortA all data IN
 	DDRA = 0b00000000;
@@ -92,8 +94,8 @@ void initialiseSystem()
 	//bit 4 and 5 also data OUT
 	//bit 6 and 7 also data IN
 	// DDRK = 0b10101100;
-	DDRK = 0b00110101;
-	PORTK = 0b00000000;
+	//DDRK = 0b00110101;
+	//PORTK = 0b00000000;
 
 	 
 	//PortC all data OUT and set to zero
@@ -115,7 +117,7 @@ void initialiseSystem()
 	"receive",
 	configMINIMAL_STACK_SIZE,
 	NULL,
-	1,
+	4,
 	NULL
 	);
 	
@@ -124,7 +126,7 @@ void initialiseSystem()
 	"send",
 	configMINIMAL_STACK_SIZE,
 	NULL,
-	1,
+	3,
 	NULL
 	);
 	 
@@ -133,7 +135,7 @@ void initialiseSystem()
 	"userInput",
 	configMINIMAL_STACK_SIZE,
 	NULL,
-	2,
+	1,
 	NULL
 	);
 	 
@@ -150,7 +152,6 @@ void initialiseSystem()
 	sendQueue = xQueueCreate(QUEUE_LENGTH, QUEUE_ITEM_SIZE);
 	receiveQueue = xQueueCreate(QUEUE_LENGTH, QUEUE_ITEM_SIZE);
 	
-	//trace_init();
 }
 /*-----------------------------------------------------------*/
 
@@ -168,7 +169,7 @@ void receiveTask (void * pvParameters)
 {
 	//picoscope
 	#if (configUSE_APPLICATION_TASK_TAG == 1)
-	vTaskSetApplicationTaskTag(NULL, (void *) 1);
+	vTaskSetApplicationTaskTag(NULL, (void *) 2);
 	#endif
 	
 	char readValue;
@@ -176,57 +177,37 @@ void receiveTask (void * pvParameters)
 	
 	for(;;)
 	{
-		vTaskDelay(pdMS_TO_TICKS(25));
+		vTaskDelay(pdMS_TO_TICKS(17));
 		
-		if ('\0' != PINA){
+		//if ('\0' != PINA && PINA > 0x0f){
+		if ('\0' != PINA){ // not hamming code
 			message.data = PINA;
-			vTaskDelay(pdMS_TO_TICKS(100));
+			vTaskDelay(pdMS_TO_TICKS(123));
 			message.parity = PINA;
 		
-			if (message.parity = getHammingBits(message.data))
+			if (message.parity == getHammingBits(message.data))
 			{
-				PORTA = setBit(PORTA, 0); // ACK
+				//PORTA = setBit(PORTA, 0); // ACK
 				xQueueSend(receiveQueue,(void*)&message, portMAX_DELAY);
 			}
 			else{
-				PORTA = setBit(PORTA, 2); // NACK
+				message.data = '<';
+				xQueueSend(receiveQueue,(void*)&message, portMAX_DELAY);
+				
+				message.data = 'E';
+				xQueueSend(receiveQueue,(void*)&message, portMAX_DELAY);
+				
+				message.data = 'R';
+				xQueueSend(receiveQueue,(void*)&message, portMAX_DELAY);
+				xQueueSend(receiveQueue,(void*)&message, portMAX_DELAY);
+				message.data = '>';
+				xQueueSend(receiveQueue,(void*)&message, portMAX_DELAY);
 			}
 		
-			vTaskDelay(pdMS_TO_TICKS(100));
-			unsetBit(PORTA, 0);
-			unsetBit(PORTA, 2);
+			vTaskDelay(pdMS_TO_TICKS(123));
 		}
 		
 	}
-}
-
-void trySend(SimpleMessage message){
-	PORTC = message.data;
-	vTaskDelay(pdMS_TO_TICKS(100));
-	PORTC = getHammingBits(message.data);
-	vTaskDelay(pdMS_TO_TICKS(100));
-}
-
-
-BaseType_t waitForAckNackOrTimeout(){
-	// Timeout after ~ 100ms
-	for (int i = 10; i > 0; i--)
-	{
-		if (bitAtPos(PINK, 1)) // ACK
-		{
-			return pdTRUE;
-		}
-		else if (bitAtPos(PINK, 3))
-		{
-			return pdFALSE;
-		}
-		vTaskDelay(pdMS_TO_TICKS(10));
-	}
-	return pdFALSE;
-}
-
-void clearMessage(){
-	PORTC = 0x00;
 }
 
 
@@ -234,7 +215,7 @@ void sendTask(void * pvParameters)
 {
 	//picoscope
 	#if (configUSE_APPLICATION_TASK_TAG == 1)
-	vTaskSetApplicationTaskTag(NULL, (void *) 2);
+	vTaskSetApplicationTaskTag(NULL, (void *) 4);
 	#endif
 	
 	struct SimpleMessage message;
@@ -242,12 +223,11 @@ void sendTask(void * pvParameters)
 	for(;;)
 	{
 		if( xQueueReceive( sendQueue, &message, portMAX_DELAY )){
-	 
-			do{
-				trySend(message);
-			} while (! waitForAckNackOrTimeout());
-			
-			clearMessage();
+			PORTC = message.data;
+			vTaskDelay(pdMS_TO_TICKS(100));
+			PORTC = message.parity;
+			vTaskDelay(pdMS_TO_TICKS(100));
+			PORTC = 0x00;
 			vTaskDelay(pdMS_TO_TICKS(100));
 		 }
 	}
@@ -258,7 +238,7 @@ void userInputTask(void * pvParameters)
 {
 	//picoscope
 	#if (configUSE_APPLICATION_TASK_TAG == 1)
-	vTaskSetApplicationTaskTag(NULL, (void *) 3);
+	vTaskSetApplicationTaskTag(NULL, (void *) 6);
 	#endif
 	
 	TickType_t last_wake_time = xTaskGetTickCount();
@@ -275,6 +255,7 @@ void userInputTask(void * pvParameters)
 		{
 			i = getchar();
 			message.data = i;
+			message.parity = getHammingBits(i);
 			xQueueSend(sendQueue,(void*)&message, portMAX_DELAY);
 		}
 	}
@@ -284,7 +265,7 @@ void printTask(void * pvParameters)
 {
 	//picoscope
 	#if (configUSE_APPLICATION_TASK_TAG == 1)
-	vTaskSetApplicationTaskTag(NULL, (void *) 4);
+	vTaskSetApplicationTaskTag(NULL, (void *) 8);
 	#endif
 	 
 	struct SimpleMessage message;
